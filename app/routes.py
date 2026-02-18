@@ -1,17 +1,31 @@
 from flask import Blueprint, request, jsonify
 from flask_bcrypt import Bcrypt
-from app.models import create_user, get_user_by_email, log_login_attempt
+from app.models import (
+    create_user,
+    get_user_by_email,
+    log_login_attempt,
+    is_ip_blocked,
+    count_recent_failures,
+    block_ip
+)
 
 main = Blueprint('main', __name__)
 bcrypt = Bcrypt()
 
-# Home route
+
+# =============================
+# HOME ROUTE
+# =============================
+
 @main.route('/')
 def home():
     return "Intrusion Detection System Running"
 
 
-# Register route
+# =============================
+# REGISTER ROUTE
+# =============================
+
 @main.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -34,38 +48,46 @@ def register():
         return jsonify({"error": "Registration failed"}), 500
 
 
-# Login route with intrusion logging
+# =============================
+# LOGIN WITH AUTOMATED BLOCKING
+# =============================
+
 @main.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
 
     email = data.get('email')
     password = data.get('password')
-
     ip_address = request.remote_addr
 
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
 
+    # Step 1: Check if IP is already blocked
+    if is_ip_blocked(ip_address):
+        log_login_attempt(None, ip_address, "BLOCKED")
+        return jsonify({"error": "IP temporarily blocked due to suspicious activity"}), 403
+
     user = get_user_by_email(email)
 
-    # User does not exist
+    # If user does not exist
     if not user:
         log_login_attempt(None, ip_address, "FAILED")
-        return jsonify({"error": "Invalid credentials"}), 401
 
-    # Correct password
-    if bcrypt.check_password_hash(user['password_hash'], password):
-
-        log_login_attempt(user['id'], ip_address, "SUCCESS")
-
-        return jsonify({
-            "message": "Login successful",
-            "user": user['email']
-        }), 200
-
-    # Wrong password
     else:
-        log_login_attempt(user['id'], ip_address, "FAILED")
+        # If password correct
+        if bcrypt.check_password_hash(user['password_hash'], password):
+            log_login_attempt(user['id'], ip_address, "SUCCESS")
+            return jsonify({"message": "Login successful"}), 200
 
-        return jsonify({"error": "Invalid credentials"}), 401
+        else:
+            log_login_attempt(user['id'], ip_address, "FAILED")
+
+    # Step 2: Check failure count
+    failures = count_recent_failures(ip_address)
+
+    if failures >= 5:
+        block_ip(ip_address)
+        return jsonify({"error": "Too many failed attempts. IP blocked."}), 403
+
+    return jsonify({"error": "Invalid credentials"}), 401
