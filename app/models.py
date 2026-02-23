@@ -30,6 +30,48 @@ def get_user_by_email(email):
     return user
 
 
+def lock_user_account(user_id, minutes=15):
+    cursor = mysql.connection.cursor()
+
+    locked_until = datetime.now() + timedelta(minutes=minutes)
+
+    query = """
+    UPDATE users
+    SET locked_until = %s
+    WHERE id = %s
+    """
+
+    cursor.execute(query, (locked_until, user_id))
+    mysql.connection.commit()
+
+    cursor.close()
+
+
+def is_account_locked(user):
+    if user['locked_until'] is None:
+        return False
+
+    return user['locked_until'] > datetime.now()
+
+
+def count_recent_user_failures(user_id, minutes=5):
+    cursor = mysql.connection.cursor()
+
+    query = """
+    SELECT COUNT(*) AS fail_count
+    FROM login_logs
+    WHERE user_id = %s
+    AND status = 'FAILED'
+    AND timestamp > (NOW() - INTERVAL %s MINUTE)
+    """
+
+    cursor.execute(query, (user_id, minutes))
+    result = cursor.fetchone()
+
+    cursor.close()
+    return result['fail_count']
+
+
 # =============================
 # LOGIN LOGGING
 # =============================
@@ -48,7 +90,7 @@ def log_login_attempt(user_id, ip_address, status):
 
 
 # =============================
-# INTRUSION DETECTION LOGIC
+# IP-BASED INTRUSION DETECTION
 # =============================
 
 def is_ip_blocked(ip_address):

@@ -6,25 +6,20 @@ from app.models import (
     log_login_attempt,
     is_ip_blocked,
     count_recent_failures,
-    block_ip
+    block_ip,
+    lock_user_account,
+    count_recent_user_failures,
+    is_account_locked
 )
 
 main = Blueprint('main', __name__)
 bcrypt = Bcrypt()
 
 
-# =============================
-# HOME ROUTE
-# =============================
-
 @main.route('/')
 def home():
     return "Intrusion Detection System Running"
 
-
-# =============================
-# REGISTER ROUTE
-# =============================
 
 @main.route('/register', methods=['POST'])
 def register():
@@ -41,16 +36,9 @@ def register():
     try:
         create_user(email, password_hash)
         return jsonify({"message": "User registered successfully"}), 201
+    except Exception:
+        return jsonify({"error": "User already exists"}), 409
 
-    except Exception as e:
-        if "Duplicate entry" in str(e):
-            return jsonify({"error": "User already exists"}), 409
-        return jsonify({"error": "Registration failed"}), 500
-
-
-# =============================
-# LOGIN WITH AUTOMATED BLOCKING
-# =============================
 
 @main.route('/login', methods=['POST'])
 def login():
@@ -63,30 +51,35 @@ def login():
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
 
-    # Step 1: Check if IP is already blocked
+    # IP check
     if is_ip_blocked(ip_address):
         log_login_attempt(None, ip_address, "BLOCKED")
         return jsonify({"error": "IP temporarily blocked due to suspicious activity"}), 403
 
     user = get_user_by_email(email)
 
-    # If user does not exist
     if not user:
         log_login_attempt(None, ip_address, "FAILED")
-
     else:
-        # If password correct
+        # Account lock check
+        if is_account_locked(user):
+            return jsonify({"error": "Account temporarily locked"}), 403
+
         if bcrypt.check_password_hash(user['password_hash'], password):
             log_login_attempt(user['id'], ip_address, "SUCCESS")
             return jsonify({"message": "Login successful"}), 200
-
         else:
             log_login_attempt(user['id'], ip_address, "FAILED")
 
-    # Step 2: Check failure count
-    failures = count_recent_failures(ip_address)
+            failures = count_recent_user_failures(user['id'])
 
-    if failures >= 5:
+            if failures >= 5:
+                lock_user_account(user['id'])
+                return jsonify({"error": "Account temporarily locked due to repeated failed attempts"}), 403
+
+    failures_ip = count_recent_failures(ip_address)
+
+    if failures_ip >= 5:
         block_ip(ip_address)
         return jsonify({"error": "Too many failed attempts. IP blocked."}), 403
 
