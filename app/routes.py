@@ -9,17 +9,27 @@ from app.models import (
     block_ip,
     lock_user_account,
     count_recent_user_failures,
-    is_account_locked
+    is_account_locked,
+    get_security_stats
 )
+from app.auth import generate_token, token_required
 
 main = Blueprint('main', __name__)
 bcrypt = Bcrypt()
 
 
+# =============================
+# HOME ROUTE
+# =============================
+
 @main.route('/')
 def home():
     return "Intrusion Detection System Running"
 
+
+# =============================
+# REGISTER ROUTE
+# =============================
 
 @main.route('/register', methods=['POST'])
 def register():
@@ -40,6 +50,10 @@ def register():
         return jsonify({"error": "User already exists"}), 409
 
 
+# =============================
+# LOGIN ROUTE (JWT for ADMIN)
+# =============================
+
 @main.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -51,7 +65,7 @@ def login():
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
 
-    # IP check
+    # IP-based block check
     if is_ip_blocked(ip_address):
         log_login_attempt(None, ip_address, "BLOCKED")
         return jsonify({"error": "IP temporarily blocked due to suspicious activity"}), 403
@@ -61,22 +75,37 @@ def login():
     if not user:
         log_login_attempt(None, ip_address, "FAILED")
     else:
-        # Account lock check
+        # Account-level lock check
         if is_account_locked(user):
             return jsonify({"error": "Account temporarily locked"}), 403
 
+        # Password check
         if bcrypt.check_password_hash(user['password_hash'], password):
             log_login_attempt(user['id'], ip_address, "SUCCESS")
+
+            # If ADMIN → generate JWT token
+            if user['role'] == 'ADMIN':
+                token = generate_token(user)
+                return jsonify({
+                    "message": "Admin login successful",
+                    "token": token
+                }), 200
+
             return jsonify({"message": "Login successful"}), 200
+
         else:
             log_login_attempt(user['id'], ip_address, "FAILED")
 
+            # Account failure tracking
             failures = count_recent_user_failures(user['id'])
 
             if failures >= 5:
                 lock_user_account(user['id'])
-                return jsonify({"error": "Account temporarily locked due to repeated failed attempts"}), 403
+                return jsonify({
+                    "error": "Account temporarily locked due to repeated failed attempts"
+                }), 403
 
+    # IP failure tracking
     failures_ip = count_recent_failures(ip_address)
 
     if failures_ip >= 5:
@@ -84,3 +113,14 @@ def login():
         return jsonify({"error": "Too many failed attempts. IP blocked."}), 403
 
     return jsonify({"error": "Invalid credentials"}), 401
+
+
+# =============================
+# PROTECTED SECURITY STATS
+# =============================
+
+@main.route('/security/stats', methods=['GET'])
+@token_required(role='ADMIN')
+def security_stats():
+    stats = get_security_stats()
+    return jsonify(stats), 200

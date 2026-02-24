@@ -140,3 +140,40 @@ def count_recent_failures(ip_address, minutes=2):
 
     cursor.close()
     return result['fail_count']
+
+# =============================
+# SECURITY ANALYTICS
+# =============================
+
+def get_security_stats():
+    cursor = mysql.connection.cursor()
+
+    # Total login attempts
+    cursor.execute("SELECT COUNT(*) AS total FROM login_logs")
+    total_attempts = cursor.fetchone()['total']
+
+    # Failed attempts
+    cursor.execute("SELECT COUNT(*) AS total FROM login_logs WHERE status = 'FAILED'")
+    failed_attempts = cursor.fetchone()['total']
+
+    # Successful logins
+    cursor.execute("SELECT COUNT(*) AS total FROM login_logs WHERE status = 'SUCCESS'")
+    successful_logins = cursor.fetchone()['total']
+
+    # Active blocked IPs
+    cursor.execute("SELECT COUNT(*) AS total FROM blocked_ips WHERE blocked_until > NOW()")
+    active_blocked_ips = cursor.fetchone()['total']
+
+    # Active locked accounts
+    cursor.execute("SELECT COUNT(*) AS total FROM users WHERE locked_until IS NOT NULL AND locked_until > NOW()")
+    active_locked_accounts = cursor.fetchone()['total']
+
+    cursor.close()
+
+    return {
+        "total_attempts": total_attempts,
+        "failed_attempts": failed_attempts,
+        "successful_logins": successful_logins,
+        "active_blocked_ips": active_blocked_ips,
+        "active_locked_accounts": active_locked_accounts
+    }

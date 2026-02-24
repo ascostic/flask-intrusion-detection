@@ -5,4 +5,4 @@ class Config:
     MYSQL_DB = 'intrusion_detection'
     MYSQL_CURSORCLASS = 'DictCursor'
 
-    SECRET_KEY = 'intrusion-detection-secret-key'
+    SECRET_KEY = 'super-secret-jwt-key'
