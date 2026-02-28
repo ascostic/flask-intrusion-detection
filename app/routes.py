@@ -15,7 +15,7 @@ from app.models import (
 )
 
 from app.auth import generate_token, token_required
-
+from app import limiter
 
 main = Blueprint('main', __name__)
 bcrypt = Bcrypt()
@@ -68,10 +68,11 @@ def register():
 
 
 # ==============================
-# LOGIN ROUTE (JWT for ADMIN)
+# LOGIN ROUTE (RATE LIMITED)
 # ==============================
 
 @main.route('/login', methods=['POST'])
+@limiter.limit("3 per minute")
 def login():
     data = request.get_json()
 
@@ -82,7 +83,7 @@ def login():
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
 
-    # Check IP block
+    # IP-based block check
     if is_ip_blocked(ip_address):
         log_login_attempt(None, ip_address, "BLOCKED")
         return jsonify({"error": "IP temporarily blocked due to suspicious activity"}), 403
@@ -92,15 +93,15 @@ def login():
     if not user:
         log_login_attempt(None, ip_address, "FAILED")
     else:
-        # Check account lock
+        # Account lock check
         if is_account_locked(user):
             return jsonify({"error": "Account temporarily locked"}), 403
 
-        # Verify password
+        # Password verification
         if bcrypt.check_password_hash(user['password_hash'], password):
             log_login_attempt(user['id'], ip_address, "SUCCESS")
 
-            # If admin → generate JWT
+            # If ADMIN → return JWT
             if user['role'] == 'ADMIN':
                 token = generate_token(user)
                 return jsonify({
