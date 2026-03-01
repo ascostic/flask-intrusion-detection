@@ -1,6 +1,5 @@
-from flask import Blueprint, request, jsonify, render_template
-from flask_bcrypt import Bcrypt
-
+from flask import Blueprint, request, jsonify, render_template, current_app
+from app.extensions import bcrypt, limiter
 from app.models import (
     create_user,
     get_user_by_email,
@@ -13,131 +12,139 @@ from app.models import (
     is_account_locked,
     get_security_stats
 )
-
 from app.auth import generate_token, token_required
-from app import limiter
-
-main = Blueprint('main', __name__)
-bcrypt = Bcrypt()
 
 
-# ==============================
-# HOME ROUTE
-# ==============================
+# =====================================================
+# BLUEPRINT (THIS MUST EXIST AT TOP LEVEL)
+# =====================================================
+main = Blueprint("main", __name__)
 
-@main.route('/')
+
+# =====================================================
+# BASIC ROUTES
+# =====================================================
+
+@main.route("/")
 def home():
     return "Intrusion Detection System Running"
 
 
-# ==============================
-# FRONTEND ROUTES
-# ==============================
-
-@main.route('/login-page')
+@main.route("/login-page")
 def login_page():
     return render_template("login.html")
 
 
-@main.route('/dashboard')
+@main.route("/dashboard")
 def dashboard():
     return render_template("dashboard.html")
 
 
-# ==============================
-# REGISTER ROUTE
-# ==============================
+# =====================================================
+# REGISTER
+# =====================================================
 
-@main.route('/register', methods=['POST'])
+@main.route("/register", methods=["POST"])
 def register():
     data = request.get_json()
 
-    email = data.get('email')
-    password = data.get('password')
+    email = data.get("email")
+    password = data.get("password")
 
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
 
-    password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+    password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
 
     try:
         create_user(email, password_hash)
+        current_app.logger.info(f"User registered: {email}")
         return jsonify({"message": "User registered successfully"}), 201
     except Exception:
+        current_app.logger.warning(f"Registration failed (duplicate): {email}")
         return jsonify({"error": "User already exists"}), 409
 
 
-# ==============================
-# LOGIN ROUTE (RATE LIMITED)
-# ==============================
+# =====================================================
+# LOGIN (RATE LIMITED)
+# =====================================================
 
-@main.route('/login', methods=['POST'])
+@main.route("/login", methods=["POST"])
 @limiter.limit("3 per minute")
 def login():
     data = request.get_json()
 
-    email = data.get('email')
-    password = data.get('password')
+    email = data.get("email")
+    password = data.get("password")
     ip_address = request.remote_addr
 
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
 
-    # IP-based block check
+    # IP BLOCK CHECK
     if is_ip_blocked(ip_address):
         log_login_attempt(None, ip_address, "BLOCKED")
-        return jsonify({"error": "IP temporarily blocked due to suspicious activity"}), 403
+        current_app.logger.warning(f"Blocked IP attempt: {ip_address}")
+        return jsonify({"error": "IP temporarily blocked"}), 403
 
     user = get_user_by_email(email)
 
     if not user:
         log_login_attempt(None, ip_address, "FAILED")
-    else:
-        # Account lock check
-        if is_account_locked(user):
-            return jsonify({"error": "Account temporarily locked"}), 403
+        current_app.logger.warning(
+            f"Failed login (unknown user): {email} from {ip_address}"
+        )
+        return jsonify({"error": "Invalid credentials"}), 401
 
-        # Password verification
-        if bcrypt.check_password_hash(user['password_hash'], password):
-            log_login_attempt(user['id'], ip_address, "SUCCESS")
+    # ACCOUNT LOCK CHECK
+    if is_account_locked(user):
+        current_app.logger.warning(
+            f"Locked account login attempt: {email}"
+        )
+        return jsonify({"error": "Account temporarily locked"}), 403
 
-            # If ADMIN → return JWT
-            if user['role'] == 'ADMIN':
-                token = generate_token(user)
-                return jsonify({
-                    "message": "Admin login successful",
-                    "token": token
-                }), 200
+    # PASSWORD CHECK
+    if bcrypt.check_password_hash(user["password_hash"], password):
+        log_login_attempt(user["id"], ip_address, "SUCCESS")
 
-            return jsonify({"message": "Login successful"}), 200
+        current_app.logger.info(
+            f"Successful login: {email} from {ip_address}"
+        )
 
-        else:
-            log_login_attempt(user['id'], ip_address, "FAILED")
+        if user.get("role") == "ADMIN":
+            token = generate_token(user)
+            return jsonify({"token": token}), 200
 
-            failures = count_recent_user_failures(user['id'])
+        return jsonify({"message": "Login successful"}), 200
 
-            if failures >= 5:
-                lock_user_account(user['id'])
-                return jsonify({
-                    "error": "Account temporarily locked due to repeated failed attempts"
-                }), 403
+    # FAILED PASSWORD
+    log_login_attempt(user["id"], ip_address, "FAILED")
 
-    # IP failure tracking
-    failures_ip = count_recent_failures(ip_address)
+    current_app.logger.warning(
+        f"Failed login (wrong password): {email} from {ip_address}"
+    )
 
-    if failures_ip >= 5:
+    # ACCOUNT FAILURE CHECK
+    if count_recent_user_failures(user["id"]) >= 5:
+        lock_user_account(user["id"])
+        current_app.logger.critical(f"Account locked: {email}")
+        return jsonify({"error": "Account temporarily locked"}), 403
+
+    # IP FAILURE CHECK
+    if count_recent_failures(ip_address) >= 5:
         block_ip(ip_address)
-        return jsonify({"error": "Too many failed attempts. IP blocked."}), 403
+        current_app.logger.critical(f"IP blocked: {ip_address}")
+        return jsonify({"error": "IP blocked"}), 403
 
     return jsonify({"error": "Invalid credentials"}), 401
 
 
-# ==============================
+# =====================================================
 # PROTECTED SECURITY STATS
-# ==============================
+# =====================================================
 
-@main.route('/security/stats', methods=['GET'])
-@token_required(role='ADMIN')
+@main.route("/security/stats", methods=["GET"])
+@token_required(role="ADMIN")
 def security_stats():
     stats = get_security_stats()
     return jsonify(stats), 200

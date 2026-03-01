@@ -1,179 +1,157 @@
-from app import mysql
 from datetime import datetime, timedelta
+from app.extensions import mysql
 
 
-# =============================
+# ==============================
 # USER MANAGEMENT
-# =============================
+# ==============================
 
 def create_user(email, password_hash):
-    cursor = mysql.connection.cursor()
-
-    query = """
-    INSERT INTO users (email, password_hash)
-    VALUES (%s, %s)
-    """
-
-    cursor.execute(query, (email, password_hash))
+    cur = mysql.connection.cursor()
+    cur.execute(
+        "INSERT INTO users (email, password_hash) VALUES (%s, %s)",
+        (email, password_hash)
+    )
     mysql.connection.commit()
-    cursor.close()
+    cur.close()
 
 
 def get_user_by_email(email):
-    cursor = mysql.connection.cursor()
-
-    query = "SELECT * FROM users WHERE email = %s"
-    cursor.execute(query, (email,))
-    user = cursor.fetchone()
-
-    cursor.close()
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+    user = cur.fetchone()
+    cur.close()
     return user
 
 
-def lock_user_account(user_id, minutes=15):
-    cursor = mysql.connection.cursor()
+# ==============================
+# LOGIN ATTEMPTS LOGGING
+# ==============================
 
-    locked_until = datetime.now() + timedelta(minutes=minutes)
-
-    query = """
-    UPDATE users
-    SET locked_until = %s
-    WHERE id = %s
-    """
-
-    cursor.execute(query, (locked_until, user_id))
+def log_login_attempt(user_id, ip_address, status):
+    cur = mysql.connection.cursor()
+    cur.execute(
+        "INSERT INTO login_logs (user_id, ip_address, status) VALUES (%s, %s, %s)",
+        (user_id, ip_address, status)
+    )
     mysql.connection.commit()
+    cur.close()
 
-    cursor.close()
+
+# ==============================
+# IP BLOCKING
+# ==============================
+
+def is_ip_blocked(ip_address):
+    cur = mysql.connection.cursor()
+    cur.execute(
+        "SELECT blocked_until FROM blocked_ips WHERE ip_address = %s",
+        (ip_address,)
+    )
+    result = cur.fetchone()
+    cur.close()
+
+    if result and result['blocked_until'] > datetime.now():
+        return True
+    return False
+
+
+def block_ip(ip_address):
+    blocked_until = datetime.now() + timedelta(minutes=15)
+
+    cur = mysql.connection.cursor()
+    cur.execute(
+        "INSERT INTO blocked_ips (ip_address, blocked_until) VALUES (%s, %s)",
+        (ip_address, blocked_until)
+    )
+    mysql.connection.commit()
+    cur.close()
+
+
+def count_recent_failures(ip_address):
+    cur = mysql.connection.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*) as count FROM login_logs
+        WHERE ip_address = %s AND status = 'FAILED'
+        AND timestamp > NOW() - INTERVAL 5 MINUTE
+        """,
+        (ip_address,)
+    )
+    result = cur.fetchone()
+    cur.close()
+    return result['count']
+
+
+# ==============================
+# ACCOUNT LOCKING
+# ==============================
+
+def count_recent_user_failures(user_id):
+    cur = mysql.connection.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*) as count FROM login_logs
+        WHERE user_id = %s AND status = 'FAILED'
+        AND timestamp > NOW() - INTERVAL 5 MINUTE
+        """,
+        (user_id,)
+    )
+    result = cur.fetchone()
+    cur.close()
+    return result['count']
+
+
+def lock_user_account(user_id):
+    locked_until = datetime.now() + timedelta(minutes=15)
+
+    cur = mysql.connection.cursor()
+    cur.execute(
+        "UPDATE users SET locked_until = %s WHERE id = %s",
+        (locked_until, user_id)
+    )
+    mysql.connection.commit()
+    cur.close()
 
 
 def is_account_locked(user):
-    if user['locked_until'] is None:
-        return False
-
-    return user['locked_until'] > datetime.now()
-
-
-def count_recent_user_failures(user_id, minutes=5):
-    cursor = mysql.connection.cursor()
-
-    query = """
-    SELECT COUNT(*) AS fail_count
-    FROM login_logs
-    WHERE user_id = %s
-    AND status = 'FAILED'
-    AND timestamp > (NOW() - INTERVAL %s MINUTE)
-    """
-
-    cursor.execute(query, (user_id, minutes))
-    result = cursor.fetchone()
-
-    cursor.close()
-    return result['fail_count']
+    if user.get("locked_until") and user["locked_until"] > datetime.now():
+        return True
+    return False
 
 
-# =============================
-# LOGIN LOGGING
-# =============================
-
-def log_login_attempt(user_id, ip_address, status):
-    cursor = mysql.connection.cursor()
-
-    query = """
-    INSERT INTO login_logs (user_id, ip_address, status)
-    VALUES (%s, %s, %s)
-    """
-
-    cursor.execute(query, (user_id, ip_address, status))
-    mysql.connection.commit()
-    cursor.close()
-
-
-# =============================
-# IP-BASED INTRUSION DETECTION
-# =============================
-
-def is_ip_blocked(ip_address):
-    cursor = mysql.connection.cursor()
-
-    query = """
-    SELECT * FROM blocked_ips
-    WHERE ip_address = %s AND blocked_until > NOW()
-    """
-
-    cursor.execute(query, (ip_address,))
-    result = cursor.fetchone()
-
-    cursor.close()
-    return result is not None
-
-
-def block_ip(ip_address, minutes=15):
-    cursor = mysql.connection.cursor()
-
-    blocked_until = datetime.now() + timedelta(minutes=minutes)
-
-    query = """
-    INSERT INTO blocked_ips (ip_address, blocked_until)
-    VALUES (%s, %s)
-    ON DUPLICATE KEY UPDATE blocked_until = %s
-    """
-
-    cursor.execute(query, (ip_address, blocked_until, blocked_until))
-    mysql.connection.commit()
-    cursor.close()
-
-
-def count_recent_failures(ip_address, minutes=2):
-    cursor = mysql.connection.cursor()
-
-    query = """
-    SELECT COUNT(*) AS fail_count
-    FROM login_logs
-    WHERE ip_address = %s
-    AND status = 'FAILED'
-    AND timestamp > (NOW() - INTERVAL %s MINUTE)
-    """
-
-    cursor.execute(query, (ip_address, minutes))
-    result = cursor.fetchone()
-
-    cursor.close()
-    return result['fail_count']
-
-# =============================
-# SECURITY ANALYTICS
-# =============================
+# ==============================
+# SECURITY DASHBOARD
+# ==============================
 
 def get_security_stats():
-    cursor = mysql.connection.cursor()
+    cur = mysql.connection.cursor()
 
-    # Total login attempts
-    cursor.execute("SELECT COUNT(*) AS total FROM login_logs")
-    total_attempts = cursor.fetchone()['total']
+    cur.execute("SELECT COUNT(*) as total FROM login_logs")
+    total = cur.fetchone()["total"]
 
-    # Failed attempts
-    cursor.execute("SELECT COUNT(*) AS total FROM login_logs WHERE status = 'FAILED'")
-    failed_attempts = cursor.fetchone()['total']
+    cur.execute("SELECT COUNT(*) as failed FROM login_logs WHERE status='FAILED'")
+    failed = cur.fetchone()["failed"]
 
-    # Successful logins
-    cursor.execute("SELECT COUNT(*) AS total FROM login_logs WHERE status = 'SUCCESS'")
-    successful_logins = cursor.fetchone()['total']
+    cur.execute("SELECT COUNT(*) as success FROM login_logs WHERE status='SUCCESS'")
+    success = cur.fetchone()["success"]
 
-    # Active blocked IPs
-    cursor.execute("SELECT COUNT(*) AS total FROM blocked_ips WHERE blocked_until > NOW()")
-    active_blocked_ips = cursor.fetchone()['total']
+    cur.execute(
+        "SELECT COUNT(*) as blocked FROM blocked_ips WHERE blocked_until > NOW()"
+    )
+    blocked = cur.fetchone()["blocked"]
 
-    # Active locked accounts
-    cursor.execute("SELECT COUNT(*) AS total FROM users WHERE locked_until IS NOT NULL AND locked_until > NOW()")
-    active_locked_accounts = cursor.fetchone()['total']
+    cur.execute(
+        "SELECT COUNT(*) as locked FROM users WHERE locked_until > NOW()"
+    )
+    locked = cur.fetchone()["locked"]
 
-    cursor.close()
+    cur.close()
 
     return {
-        "total_attempts": total_attempts,
-        "failed_attempts": failed_attempts,
-        "successful_logins": successful_logins,
-        "active_blocked_ips": active_blocked_ips,
-        "active_locked_accounts": active_locked_accounts
+        "total_attempts": total,
+        "failed_attempts": failed,
+        "successful_logins": success,
+        "active_blocked_ips": blocked,
+        "active_locked_accounts": locked
     }

@@ -1,16 +1,9 @@
+import os
+import logging
+from logging.handlers import RotatingFileHandler
 from flask import Flask
-from flask_mysqldb import MySQL
-from flask_bcrypt import Bcrypt
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 
-from config import Config
-
-
-# Extensions
-mysql = MySQL()
-bcrypt = Bcrypt()
-limiter = Limiter(key_func=get_remote_address)
+from app.extensions import mysql, bcrypt, limiter
 
 
 def create_app():
@@ -20,10 +13,21 @@ def create_app():
         static_folder="../static"
     )
 
-    # Load configuration
-    app.config.from_object(Config)
+    # ==============================
+    # Load Configuration
+    # ==============================
+    config_name = os.environ.get("FLASK_ENV", "development")
 
-    # Initialize extensions
+    if config_name == "production":
+        from config import ProductionConfig
+        app.config.from_object(ProductionConfig)
+    else:
+        from config import DevelopmentConfig
+        app.config.from_object(DevelopmentConfig)
+
+    # ==============================
+    # Initialize Extensions
+    # ==============================
     mysql.init_app(app)
     bcrypt.init_app(app)
     limiter.init_app(app)
@@ -39,7 +43,32 @@ def create_app():
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
+    # ==============================
+    # Production Logging
+    # ==============================
+    if not app.debug:
+        if not os.path.exists("logs"):
+            os.mkdir("logs")
+
+        file_handler = RotatingFileHandler(
+            "logs/security_app.log",
+            maxBytes=10240,
+            backupCount=5
+        )
+
+        file_handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s"
+        ))
+
+        file_handler.setLevel(logging.INFO)
+        app.logger.addHandler(file_handler)
+        app.logger.setLevel(logging.INFO)
+
+        app.logger.info("Security Application Startup")
+
+    # ==============================
     # Register Blueprints
+    # ==============================
     from app.routes import main
     app.register_blueprint(main)
 
