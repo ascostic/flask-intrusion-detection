@@ -5,4 +5,8 @@ from flask_limiter.util import get_remote_address
 
 mysql = MySQL()
 bcrypt = Bcrypt()
-limiter = Limiter(key_func=get_remote_address)
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri="redis://127.0.0.1:6379"
+)
