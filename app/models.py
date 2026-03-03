@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 from app.extensions import mysql
 
 
-# ==============================
+# =====================================================
 # USER MANAGEMENT
-# ==============================
+# =====================================================
 
 def create_user(email, password_hash):
     cur = mysql.connection.cursor()
@@ -24,9 +24,9 @@ def get_user_by_email(email):
     return user
 
 
-# ==============================
-# LOGIN ATTEMPTS LOGGING
-# ==============================
+# =====================================================
+# LOGIN ATTEMPTS
+# =====================================================
 
 def log_login_attempt(user_id, ip_address, status):
     cur = mysql.connection.cursor()
@@ -38,9 +38,60 @@ def log_login_attempt(user_id, ip_address, status):
     cur.close()
 
 
-# ==============================
+# =====================================================
+# RISK SCORING ENGINE
+# =====================================================
+
+def get_risk(entity_type, entity_id):
+    cur = mysql.connection.cursor()
+    cur.execute(
+        "SELECT risk_score FROM risk_scores WHERE entity_type=%s AND entity_id=%s",
+        (entity_type, str(entity_id))
+    )
+    result = cur.fetchone()
+    cur.close()
+
+    if result:
+        return result["risk_score"]
+    return 0
+
+
+def add_risk(entity_type, entity_id, score):
+    current_score = get_risk(entity_type, entity_id)
+    new_score = current_score + score
+
+    cur = mysql.connection.cursor()
+
+    if current_score == 0:
+        cur.execute(
+            "INSERT INTO risk_scores (entity_type, entity_id, risk_score) VALUES (%s, %s, %s)",
+            (entity_type, str(entity_id), new_score)
+        )
+    else:
+        cur.execute(
+            "UPDATE risk_scores SET risk_score=%s WHERE entity_type=%s AND entity_id=%s",
+            (new_score, entity_type, str(entity_id))
+        )
+
+    mysql.connection.commit()
+    cur.close()
+
+    return new_score
+
+
+def reset_risk(entity_type, entity_id):
+    cur = mysql.connection.cursor()
+    cur.execute(
+        "DELETE FROM risk_scores WHERE entity_type=%s AND entity_id=%s",
+        (entity_type, str(entity_id))
+    )
+    mysql.connection.commit()
+    cur.close()
+
+
+# =====================================================
 # IP BLOCKING
-# ==============================
+# =====================================================
 
 def is_ip_blocked(ip_address):
     cur = mysql.connection.cursor()
@@ -51,7 +102,7 @@ def is_ip_blocked(ip_address):
     result = cur.fetchone()
     cur.close()
 
-    if result and result['blocked_until'] > datetime.now():
+    if result and result["blocked_until"] > datetime.now():
         return True
     return False
 
@@ -68,61 +119,9 @@ def block_ip(ip_address):
     cur.close()
 
 
-def count_recent_failures(ip_address):
-    cur = mysql.connection.cursor()
-    cur.execute(
-        """
-        SELECT COUNT(*) as count FROM login_logs
-        WHERE ip_address = %s AND status = 'FAILED'
-        AND timestamp > NOW() - INTERVAL 5 MINUTE
-        """,
-        (ip_address,)
-    )
-    result = cur.fetchone()
-    cur.close()
-    return result['count']
-
-
-# ==============================
-# ACCOUNT LOCKING
-# ==============================
-
-def count_recent_user_failures(user_id):
-    cur = mysql.connection.cursor()
-    cur.execute(
-        """
-        SELECT COUNT(*) as count FROM login_logs
-        WHERE user_id = %s AND status = 'FAILED'
-        AND timestamp > NOW() - INTERVAL 5 MINUTE
-        """,
-        (user_id,)
-    )
-    result = cur.fetchone()
-    cur.close()
-    return result['count']
-
-
-def lock_user_account(user_id):
-    locked_until = datetime.now() + timedelta(minutes=15)
-
-    cur = mysql.connection.cursor()
-    cur.execute(
-        "UPDATE users SET locked_until = %s WHERE id = %s",
-        (locked_until, user_id)
-    )
-    mysql.connection.commit()
-    cur.close()
-
-
-def is_account_locked(user):
-    if user.get("locked_until") and user["locked_until"] > datetime.now():
-        return True
-    return False
-
-
-# ==============================
+# =====================================================
 # SECURITY DASHBOARD
-# ==============================
+# =====================================================
 
 def get_security_stats():
     cur = mysql.connection.cursor()
