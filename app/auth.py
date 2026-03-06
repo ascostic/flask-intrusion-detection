@@ -1,48 +1,61 @@
 import jwt
-from datetime import datetime, timedelta
+import datetime
 from functools import wraps
 from flask import request, jsonify, current_app
 
 
-def generate_token(user):
+# ======================================
+# GENERATE TOKEN
+# ======================================
+
+def generate_token(user_id, email, role):
+
     payload = {
-        "user_id": user["id"],
-        "email": user["email"],
-        "role": user["role"],
-        "exp": datetime.utcnow() + timedelta(hours=1)
+        "user_id": user_id,
+        "email": email,
+        "role": role,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2)
     }
 
-    token = jwt.encode(payload, current_app.config["SECRET_KEY"], algorithm="HS256")
+    token = jwt.encode(
+        payload,
+        current_app.config["SECRET_KEY"],
+        algorithm="HS256"
+    )
+
     return token
 
 
-def token_required(role=None):
-    def decorator(f):
-        @wraps(f)
-        def wrapper(*args, **kwargs):
-            auth_header = request.headers.get("Authorization")
+# ======================================
+# TOKEN REQUIRED DECORATOR
+# ======================================
 
-            if not auth_header or not auth_header.startswith("Bearer "):
-                return jsonify({"error": "Token required"}), 401
+def token_required(f):
+
+    @wraps(f)
+    def decorated(*args, **kwargs):
+
+        auth_header = request.headers.get("Authorization")
+
+        if not auth_header:
+            return jsonify({"error": "Token missing"}), 401
+
+        try:
 
             token = auth_header.split(" ")[1]
 
-            try:
-                decoded = jwt.decode(
-                    token,
-                    current_app.config["SECRET_KEY"],
-                    algorithms=["HS256"]
-                )
+            data = jwt.decode(
+                token,
+                current_app.config["SECRET_KEY"],
+                algorithms=["HS256"]
+            )
 
-                if role and decoded.get("role") != role:
-                    return jsonify({"error": "Unauthorized access"}), 403
+            return f(data, *args, **kwargs)
 
-            except jwt.ExpiredSignatureError:
-                return jsonify({"error": "Token expired"}), 401
-            except jwt.InvalidTokenError:
-                return jsonify({"error": "Invalid token"}), 401
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token expired"}), 401
 
-            return f(*args, **kwargs)
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "Invalid token"}), 401
 
-        return wrapper
-    return decorator
+    return decorated

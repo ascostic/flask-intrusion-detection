@@ -4,12 +4,18 @@
     <title>Security Dashboard</title>
 </head>
 <body>
-    <h2>Security Dashboard</h2>
 
-    <div id="stats"></div>
+<h1>Intrusion Detection Dashboard</h1>
 
-    <button onclick="logout()">Logout</button>
+<div>
+    <p>Total Attempts: <span id="total"></span></p>
+    <p>Failed Attempts: <span id="failed"></span></p>
+    <p>Successful Logins: <span id="success"></span></p>
+    <p>Blocked IPs: <span id="blocked"></span></p>
+    <p>Locked Accounts: <span id="locked"></span></p>
+</div>
 
-    <script src="/static/script.js"></script>
+<script src="/static/dashboard.js"></script>
+
 </body>
 </html>

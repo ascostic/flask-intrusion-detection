@@ -125,16 +125,12 @@ def create_app():
             "message": "Internal server error"
         }), 500
 
-    @app.errorhandler(Exception)
-    def handle_unexpected_error(e):
-        app.logger.error("Unhandled Exception")
-        app.logger.error(traceback.format_exc())
-
-        return jsonify({
-            "status": "error",
-            "code": 500,
-            "message": "Unexpected server error"
-        }), 500
+    #@app.errorhandler(Exception)
+    #def handle_exception(e):
+     #   return {
+     #   "error": str(e),
+      #  "type": type(e).__name__
+    #}, 500
 
     # ==========================================
     # Register Blueprints
