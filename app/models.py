@@ -46,6 +46,37 @@ def record_login_attempt(user_id, ip, success):
     conn.commit()
     cur.close()
 
+def count_recent_failures(user_id):
+    conn = mysql.connection
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) AS failures
+        FROM login_attempts
+        WHERE user_id = %s
+        AND success = 0
+        AND timestamp > NOW() - INTERVAL 5 MINUTE
+    """, (user_id,))
+
+    result = cur.fetchone()
+    cur.close()
+
+    return result["failures"]
+
+def lock_user_account(user_id):
+
+    conn = mysql.connection
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE users
+        SET locked_until = NOW() + INTERVAL 15 MINUTE
+        WHERE id = %s
+    """, (user_id,))
+
+    conn.commit()
+    cur.close()
+
 def get_security_stats():
 
     conn = mysql.connection
